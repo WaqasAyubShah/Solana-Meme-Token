@@ -33,14 +33,6 @@ struct KingWhale {
 }
 
 #[derive(Debug, PartialEq)]
-struct Lottery {
-    is_initialized: bool,
-    whitelist: Vec<Pubkey>,
-    last_lottery_timestamp: i64,
-    winner: Option<Pubkey>,
-}
-
-#[derive(Debug, PartialEq)]
 struct Blacklist {
     is_initialized: bool,
     blacklisted_accounts: Vec<Pubkey>,
@@ -55,7 +47,6 @@ struct Wallets {
 impl Sealed for AresToken {}
 impl Sealed for LiquidityPool {}
 impl Sealed for KingWhale {}
-impl Sealed for Lottery {}
 impl Sealed for Blacklist {}
 impl Sealed for Wallets {}
 
@@ -74,12 +65,6 @@ impl IsInitialized for LiquidityPool {
 impl IsInitialized for KingWhale {
     fn is_initialized(&self) -> bool {
         self.kingwhale_account != Pubkey::default()
-    }
-}
-
-impl IsInitialized for Lottery {
-    fn is_initialized(&self) -> bool {
-        self.is_initialized
     }
 }
 
@@ -165,49 +150,10 @@ impl Pack for KingWhale {
     }
 }
 
-impl Pack for Lottery {
-    const LEN: usize = 41; // 1 (is_initialized) + 32 (whitelist) + 8 (last_lottery_timestamp) + 1 (winner)
-
-    fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
-        let is_initialized = src[0] != 0;
-        let whitelist = src[1..33].chunks_exact(32).map(|x| Pubkey::new_from_array(x.try_into().unwrap())).collect();
-        let last_lottery_timestamp = i64::from_le_bytes(src[33..41].try_into().unwrap());
-        let winner = if src[41] != 0 {
-            Some(Pubkey::new_from_array(src[41..73].try_into().unwrap()))
-        } else {
-            None
-        };
-
-        Ok(Lottery {
-            is_initialized,
-            whitelist,
-            last_lottery_timestamp,
-            winner,
-        })
-    }
-
-    fn pack_into_slice(&self, dst: &mut [u8]) {
-        dst[0] = self.is_initialized as u8;
-
-        for (i, pubkey) in self.whitelist.iter().enumerate() {
-            dst[1 + i * 32..33 + i * 32].copy_from_slice(&pubkey.to_bytes());
-        }
-
-        dst[33..41].copy_from_slice(&self.last_lottery_timestamp.to_le_bytes());
-
-        if let Some(winner) = &self.winner {
-            dst[41] = 1;
-            dst[42..74].copy_from_slice(&winner.to_bytes());
-        } else {
-            dst[41] = 0;
-        }
-    }
-}
-
 impl Pack for Blacklist {
     const LEN: usize = 33; // 1 (is_initialized) + (32 * 1) (blacklisted_accounts)
 
-    fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
+    fn.unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
         let is_initialized = src[0] != 0;
         let blacklisted_accounts = src[1..33].chunks_exact(32).map(|x| Pubkey::new_from_array(x.try_into().unwrap())).collect();
 
@@ -229,7 +175,7 @@ impl Pack for Blacklist {
 impl Pack for Wallets {
     const LEN: usize = 64; // 32-byte marketing_wallet + 32-byte staff_wallet
 
-    fn unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
+    fn.unpack_from_slice(src: &[u8]) -> Result<Self, ProgramError> {
         let marketing_wallet = Pubkey::new_from_array(src[0..32].try_into().unwrap());
         let staff_wallet = Pubkey::new_from_array(src[32..64].try_into().unwrap());
 
@@ -338,7 +284,7 @@ fn process_instruction(
             let transfer_amount = u64::from_le_bytes(instruction_data[0..8].try_into().unwrap());
 
             if transfer_amount > kingwhale_data.largest_purchase {
-                kingwhale_data.largest_purchase = transfer_amount;              //update king whale here 
+                kingwhale_data.largest_purchase = transfer_amount;
                 kingwhale_data.kingwhale_account = *sender_wallet.key;
 
                 // Perform any additional logic related to updating the King Whale if needed
@@ -424,43 +370,28 @@ fn process_instruction(
             }
 
             // Distribute tax to different wallets
-            let kindwhales_wallet = next_account_info(accounts_iter)?;
-            let lottery_wallet = next_account_info(accounts_iter)?;
-            let staff_wallet = next_account_info(accounts_iter)?;
-            let marketing_wallet = next_account_info(accounts_iter)?;
+            let wallets_account = next_account_info(accounts_iter)?;
 
-            let kindwhales_share = (tax_amount as f64 * 0.01) as u64;
-            let lottery_share = (tax_amount as f64 * 0.01) as u64;
-            let staff_share = (tax_amount as f64 * 0.01) as u64;
-            let marketing_share = (tax_amount as f64 * 0.02) as u64;
+            let mut wallets_data = Wallets::unpack_from_slice(&wallets_account.data.borrow())?;
+            if !wallets_data.is_initialized {
+                wallets_data.is_initialized = true;
+                wallets_data.marketing_wallet = *next_account_info(accounts_iter)?.key;
+                wallets_data.staff_wallet = *next_account_info(accounts_iter)?.key;
+            }
 
             // Update wallet balances
-            kindwhales_wallet
+            wallets_data.marketing_wallet
                 .try_borrow_mut_data()?
                 .get_mut(0..8)
                 .map(|data| {
-                    data.copy_from_slice(&(kindwhales_wallet.data.borrow()[0..8].to_le_bytes()));
+                    data.copy_from_slice(&(wallets_data.marketing_wallet.data.borrow()[0..8].to_le_bytes()));
                 });
 
-            lottery_wallet
+            wallets_data.staff_wallet
                 .try_borrow_mut_data()?
                 .get_mut(0..8)
                 .map(|data| {
-                    data.copy_from_slice(&(lottery_wallet.data.borrow()[0..8].to_le_bytes()));
-                });
-
-            staff_wallet
-                .try_borrow_mut_data()?
-                .get_mut(0..8)
-                .map(|data| {
-                    data.copy_from_slice(&(staff_wallet.data.borrow()[0..8].to_le_bytes()));
-                });
-
-            marketing_wallet
-                .try_borrow_mut_data()?
-                .get_mut(0..8)
-                .map(|data| {
-                    data.copy_from_slice(&(marketing_wallet.data.borrow()[0..8].to_le_bytes()));
+                    data.copy_from_slice(&(wallets_data.staff_wallet.data.borrow()[0..8].to_le_bytes()));
                 });
 
             msg!(
@@ -468,38 +399,21 @@ fn process_instruction(
                 tax_amount,
                 tax_percentage
             );
-            msg!("Distributed to Kindwhales: {}", kindwhales_share);
-            msg!("Distributed to Lottery: {}", lottery_share);
-            msg!("Distributed to Staff: {}", staff_share);
-            msg!("Distributed to Marketing: {}", marketing_share);
+            msg!("Distributed to Marketing: {}", tax_amount);
 
             // Update wallet balances
-            kindwhales_wallet
+            wallets_data.marketing_wallet
                 .try_borrow_mut_data()?
                 .get_mut(0..8)
                 .map(|data| {
-                    data.copy_from_slice(&(kindwhales_wallet.data.borrow()[0..8].to_le_bytes()));
+                    data.copy_from_slice(&(wallets_data.marketing_wallet.data.borrow()[0..8].to_le_bytes()));
                 });
 
-            lottery_wallet
+            wallets_data.staff_wallet
                 .try_borrow_mut_data()?
                 .get_mut(0..8)
                 .map(|data| {
-                    data.copy_from_slice(&(lottery_wallet.data.borrow()[0..8].to_le_bytes()));
-                });
-
-            staff_wallet
-                .try_borrow_mut_data()?
-                .get_mut(0..8)
-                .map(|data| {
-                    data.copy_from_slice(&(staff_wallet.data.borrow()[0..8].to_le_bytes()));
-                });
-
-            marketing_wallet
-                .try_borrow_mut_data()?
-                .get_mut(0..8)
-                .map(|data| {
-                    data.copy_from_slice(&(marketing_wallet.data.borrow()[0..8].to_le_bytes()));
+                    data.copy_from_slice(&(wallets_data.staff_wallet.data.borrow()[0..8].to_le_bytes()));
                 });
 
             // Update the token balances for sender and recipient
@@ -518,41 +432,9 @@ fn process_instruction(
             msg!("New unlocked supply: {}", ares_token_data.unlocked_supply);
 
             AresToken::pack_into_slice(&ares_token_data, &mut ares_account.data.borrow_mut());
+            Wallets::pack_into_slice(&wallets_data, &mut wallets_account.data.borrow_mut());
         }
     }
-
-    // Lottery mechanism: 1% lottery tax sent to one winner after each 72 hours
-    let lottery_account = next_account_info(accounts_iter)?;
-
-    let mut lottery_data = Lottery::unpack_from_slice(&lottery_account.data.borrow())?;
-    if !lottery_data.is_initialized {
-        lottery_data.is_initialized = true;
-        lottery_data.whitelist = Vec::new();                                //Add account to lottery
-        lottery_data.last_lottery_timestamp = clock.unix_timestamp;
-        lottery_data.winner = None;
-    }
-
-    // Check if 72 hours have passed since the last lottery
-    let elapsed_time = clock.unix_timestamp - lottery_data.last_lottery_timestamp;
-    if elapsed_time >= 72 * 3600 {
-        // Perform lottery draw and choose a winner from the whitelist
-        if let Some(winner) = lottery_data.whitelist.choose(&mut thread_rng()) {
-            // Distribute 1% lottery tax to the winner
-            let lottery_tax_amount = (ares_token_data.unlocked_supply as f64 * 0.01) as u64;
-            ares_token_data.unlocked_supply -= lottery_tax_amount;
-            winner_data.unlocked_supply += lottery_tax_amount;                    //send the tax to winner 
-
-            // Update the winner in the lottery data
-            lottery_data.winner = Some(*winner);
-
-            // Reset the lottery timer
-            lottery_data.last_lottery_timestamp = clock.unix_timestamp;
-
-            msg!("Lottery winner: {}", winner);
-        }
-    }
-
-    Lottery::pack_into_slice(&lottery_data, &mut lottery_account.data.borrow_mut());
 
     Ok(())
 }
